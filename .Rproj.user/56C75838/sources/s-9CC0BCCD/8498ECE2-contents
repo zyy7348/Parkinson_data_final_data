@@ -1,0 +1,135 @@
+---
+title: "p8105_hw2_yz3300.Rmd"
+author: "Yeyi Zhang"
+date: 2017-10-01
+output: html_document
+---
+
+# Problem 1
+
+```{r start, include=FALSE}
+library(tidyverse)
+library(readxl)
+library(janitor)
+
+```
+
+```{r trash_wheel}
+trash_data = 
+  read_excel("../data/HealthyHarborWaterWheelTotals2017-9-26.xlsx", sheet = "Mr. Trash Wheel", range = cell_cols("A:N")) %>%
+  clean_names() %>%
+  filter(!is.na(dumpster)) %>%
+  mutate(sports_balls = as.integer(round(sports_balls, digit = 0)))
+trash_data
+
+```
+
+```{r 16_17}
+partici_data_17 = 
+  read_excel("../data/HealthyHarborWaterWheelTotals2017-9-26.xlsx", sheet = "2017 Precipitation", range = "A2:B15")%>%
+  clean_names()%>%
+  filter(!is.na(total))%>%
+  mutate(
+    year = 2017
+  )
+ 
+partici_data_16 = 
+  read_excel("../data/HealthyHarborWaterWheelTotals2017-9-26.xlsx", sheet = "2016 Precipitation", range = "A2:B15")%>%
+  clean_names()%>%
+  filter(!is.na(total))%>%
+  mutate(
+    year = 2016
+  )
+
+partici_tidy = 
+  bind_rows(partici_data_17, partici_data_16) %>%
+  select(month, everything())%>%
+  mutate(month = month.name[month])
+partici_tidy
+```    
+
+* The first dataset describes the trash removed from the Inner Harbor from May of 2014 to August of 2017, with different types of trash and their total amount. 
+
+* The number of observations is `r nrow(trash_data)`.
+
+* The median number of sports balls in dumpster in 2016 is `r median(trash_data$sports_balls[which(trash_data$year == 2016)])`.
+
+* The second and third datasets describe the precipitation for 2016 and 2017, respectively.
+
+* The number of observation is `r nrow(partici_tidy)`, and the key varible is "month".
+
+* The total precipitation in 2017 is `r sum(partici_data_17$total[which(partici_data_17$total < 10)])`.
+
+
+# Problem 2
+
+```{r p2}
+pols_data = 
+  read_csv("../data/fivethirtyeight_datasets/pols-month.csv") %>%
+  clean_names() %>%
+  separate(
+    mon, into = c("year", "month", "day"), sep = "-"
+  ) %>%
+  mutate(month = month.name[as.integer(month)],
+         president = gov_gop + sen_gop + rep_gop + gov_dem + sen_dem + rep_gop) %>%
+  select(-day)
+pols_data
+
+  
+snp_data =
+  read_csv("../data/fivethirtyeight_datasets/snp.csv") %>%
+  clean_names()%>%
+  separate(
+    date, into = c("day", "month", "year"), sep = "/"
+ )%>%
+ mutate(month = month.name[as.integer(month)])%>%
+ select(year, month, close)
+snp_data
+
+unemploy_tidy_data = read_csv("../data/fivethirtyeight_datasets/unemployment.csv") %>%
+  clean_names()%>%
+  rename(
+    January = jan, Feburary = feb, March = mar, April = apr, May = may, June = jun, July = jul, August = aug, September = sep, October = oct, December = dec)%>%
+  gather(
+    key = month, value = unemploy_rate, January:December
+  )%>%
+  mutate(year = as.character(year))
+unemploy_tidy_data
+
+two_tidy_data = left_join(pols_data, snp_data, by = c("year", "month"))
+three_tidy_data = left_join(two_tidy_data, unemploy_tidy_data, by = c("year","month"))
+  
+```
+
+* The dataset is combined by three datasets. It contains two key variables "year" and "month". 
+ 
+* The first dataset includes number of national politicians who are democratic or republican. And the number were recorded on the 15th day of each month from January 1947 to June 2015. In the dataset, democratic and republican people are separated into  governors, senators and representatives, respectively. 
+ 
+* The second dataset is a list of closing values of the S&P stock index. The time ranges from 1950 to 2015. 
+ 
+* The last dataset shows the percentage of unemployment corresponding to different months of years. The time range is from 1948 to 2015.
+ 
+* In Januarys in or after 1975 in which a democrat was president, the arverage unemployment rate is `r mean(three_tidy_data$unemploy_rate[which(three_tidy_data$year >= 1975 & three_tidy_data$month == "January")])`.
+
+# Problem 3
+
+```{r p3}
+instac_data = read_csv("../data/instacart_train_data.csv.zip")
+instac_filt = filter(instac_data, department_id == 4)
+hist(instac_filt$order_hour_of_day)
+
+distinct(instac_data, aisle == "yogurt", department)
+distinct(instac_data, department =="dairy eggs", aisle)
+
+
+```
+
+* There ara `r nrow(instac_data)` entries and `r length(unique(instac_data$order_id))` unique orders in the dataset.
+ 
+* A department can have many aisles, but a aisle can only belong to one department, as shown above.
+
+* Department `r names(which.max(table(instac_data$department)))` has the most items ordered, and `r names(which.min(table(instac_data$department)))` has the least items ordered.
+
+* The median number of days since the prior order is `r median(instac_data$days_since_prior_order, na.rm = TRUE)`.
+
+* The median hour of the day at which Pink Lady Apples are ordered is `r median(instac_data$order_hour_of_day[which(instac_data$product_name == "Pink Lady Apples")])`, and `r median(instac_data$order_hour_of_day[which(instac_data$product_name == "Coffee Ice Cream")])` is the median hour of day that Coffee Ice Cream ordered.
