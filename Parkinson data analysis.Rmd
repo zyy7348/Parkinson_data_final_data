@@ -15,6 +15,8 @@ library(randomForest)
 library(gbm)
 library(e1071)
 library(caret)
+library(ROCR)
+library(pROC)
 ```
 
 ## read data
@@ -22,13 +24,18 @@ library(caret)
 pd.dat = read.csv("./train_data.txt",header = FALSE, col.names = c("id","jitter_1","jitter_2","jitter_3","jitter_4","jitter_5","shimmer_1","shimmer_2","shimmer_3","shimmer_4","shimmer_5","shimmer_6","ac","nth","htn","median_pitch","mean_pitch","sd_pitch","min_pitch","max_pitch","pulses","periods","mean_period","sd_period","luf","breaks","dov_breaks","updrs","class"))
 
 pd.dat= pd.dat%>%
-  select(-updrs,-id)
+  select(-updrs,-id)%>%
+  mutate(class=factor(class))
 
 set.seed(1)
 train = sample(dim(pd.dat)[1], 640)
 train_data = pd.dat[train, ]
 #a test set containing the remaining observations
 test_data = pd.dat[-train, ]
+
+# graphical summary
+correlations <- cor(train_data[-27])
+corrplot(correlations, order = "original")#, tl.cex = 0.2)
 ```
 
 # PCA - denoising the data
@@ -37,18 +44,21 @@ pca.dat=pd.dat%>%
   select(-class)
 
 pr.out=prcomp(pca.dat, scale=TRUE)
+
+# We now plot the first few principal component score vectors, in order to visualize the data. The observations (recordings) corresponding to a given PD status will be plotted in the same color, so that we can see to what extent the observations with PD are similar to each other. We first create a simple function that assigns a distinct color to each element of a numeric vector. The function will be used to assign a color to each observation, based on the PD status to which it corresponds.
 Cols=function(vec){
  cols=rainbow(length(unique(vec)))
  return(cols[as.numeric(as.factor(vec))]) 
 }
 
+# We now can plot the principal component score vectors.
 par(mfrow=c(1,2))
-plot(pr.out$x[,1:2], col=Cols(pd.dat$class), pch=20,cex=0.5,
+plot(pr.out$x[,1:2], col=Cols(pd.dat$class), pch=19,cex=0.5,
 xlab="Z1",ylab="Z2")
-plot(pr.out$x[,c(1,3)], col=Cols(pd.dat$class), pch=20,cex=0.5,
+plot(pr.out$x[,c(1,3)], col=Cols(pd.dat$class), pch=19,cex=0.5,
 xlab="Z1",ylab="Z3")
 
-summary(pr.out) 
+# The resulting plots are shown in Figure 10.15. On the whole, all observations tend to have similar values on the first few principal component score vectors. This indicates that cell lines from the same cancer type tend to have pretty similar gene expression levels.
 
 pve=100*pr.out$sdev^2/sum(pr.out$sdev^2)
 par(mfrow=c(1,2))
@@ -56,6 +66,15 @@ plot(pve, type="o", ylab="PVE", xlab="Principal Component",
 col =" blue ")
 plot(cumsum(pve), type="o", ylab="Cumulative PVE", xlab="
 Principal Component ", col =" brown3 ")
+
+sumpve=0
+for (i in 1:26){
+    sumpve=sumpve+pve[i]
+    if(sumpve>90){
+        break
+    }
+}
+cat("Number of principal components to get 90% of the variance equals",i)
 
 # We see that together, the first seven principal components explain around 90 % of the variance in the data. This is a huge amount of the variance. However, looking at the scree plot, we see that while each of the first seven principal components explain a substantial amount of variance, there is a marked decrease in the variance explained by further principal components. That is, there is an elbow in the plot after approximately the seventh principal component. This suggests that there may be little benefit to examining more than seven or so principal components (though even examining seven principal components may be difficult)
 ```
@@ -76,7 +95,7 @@ km.out$tot.withinss
 # We can plot the data, with each observation colored according to its cluster assignment. Because there were more than two variables, we could instead use the result in PCA and plot the first two principal components score vectors.
 plot(pr.out$x[,c(1,2)], col=(km.out$cluster+1), main="K-Means Clustering Results with K=2", xlab="", ylab="", pch=20, cex=0.5)
 
-# Rather than performing hierarchical clustering on the entire data matrix, we can simply perform hierarchical clustering on the first few principal component score vectors, as follows
+# Rather than performing k-means clustering on the entire data matrix, we can simply perform K-means clustering on the first few principal component score vectors, as follows
 km.out2=kmeans(pr.out$x[,1:7], 2, nstart=20)
 table(km.out2$cluster)
 km.out2$tot.withinss
@@ -84,24 +103,60 @@ plot(pr.out$x[,c(1,2)], col=(km.out2$cluster+1), main="K-Means Clustering Result
 
 # Not surprisingly, these results are different from the ones that we obtained when we performed K-means clustering on the full data set. Sometimes performing clustering on the first few principal component score vectors can give better results than performing clustering on the full data. In this situation, we might view the principal component step as one of denoising the data. The K-means clustering on the first 7 principle component score vectors perfectly separated the observations into two clusters even though we did not supply any group information to kmeans().
 ```
-# svm with linear kernal
+
+# svm with polynomial kernal
 ```{r }
 #  Use the tune() function to select cost in the classifier
 set.seed(1)
-tune.out=tune(svm, factor(class) ~ ., data=train_data, 
-                 kernel="linear",
-                  ranges=list(cost=10^seq(-2, 1, by=0.25)))
-summary(tune.out)
+tune.out=tune(svm, class ~ ., data=train_data, 
+                 kernel="polynomial",
+                  ranges=list(cost=c(0.1,0.5,1,10),degree=c(1,2,3,4,5)))
 # best parameters
 tune.out$best.parameters
 
 # Fit a support vector machine with a linear kernel to the training data
-svm.linear = svm(factor(class)~., data=train_data, kernel="linear", cost=tune.out$best.parameters$cost)
-summary(svm.linear)
+svm.poly = svm(class ~ ., data=train_data, kernel="polynomial", cost=tune.out$best.parameters$cost,degree=tune.out$best.parameters$degree,gamma=0.1)
+summary(svm.poly)
 
-table(true=train_data$class, pred=predict(svm.linear, newdata=train_data))
-error_train.linear = (179+168)/(341+179+168+352)
+table(true=train_data$class, pred=predict(svm.poly, newdata=train_data))
+error_train.linear = (26+18)/640
 
-table(true=test_data$class, pred=predict(svm.linear, newdata=test_data))
-error_test.linear = 158/169
+table(true=test_data$class, pred=predict(svm.poly, newdata=test_data))
+error_test.poly = (66+60)/400
+
+fitted=attributes(predict(svm.poly,test_data,decision.values=T))$decision.values
+# ROC curve
+roc.svm <- roc(test_data$class,as.numeric(fitted),
+               levels = c(0,1))
+plot(roc.svm, legacy.axes = TRUE)
+roc.svm$auc
+```
+
+# svm with radial kernal
+```{r }
+#  Use the tune() function to select cost in the classifier
+set.seed(1)
+tune.out2=tune(svm, class ~ ., data=train_data, 
+                 kernel="radial",
+                  ranges=list(cost=10^seq(-2, 1, by=0.25),gamma=c(0.0001,0.001,0.01,0.1,0.5,1)))
+summary(tune.out2)
+# best parameters
+tune.out2$best.parameters
+
+# Fit a support vector machine with a linear kernel to the training data
+svm.radial = svm(class~., data=train_data, kernel="radial", cost=tune.out2$best.parameters$cost, gamma=tune.out2$best.parameters$gamma)
+summary(svm.radial)
+
+table(true=train_data$class, pred=predict(svm.radial, newdata=train_data))
+error_train.radial = (20+12)/(640)
+
+table(true=test_data$class, pred=predict(svm.radial, newdata=test_data))
+error_test.radial = (61+67)/(400)
+
+fitted2=attributes(predict(svm.radial,test_data,decision.values=T))$decision.values
+# ROC curve
+roc.svm2 <- roc(test_data$class,as.numeric(fitted2),
+               levels = c(0,1))
+plot(roc.svm2, legacy.axes = TRUE)
+roc.svm2$auc
 ```
