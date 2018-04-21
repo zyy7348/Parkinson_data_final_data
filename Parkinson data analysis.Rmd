@@ -9,9 +9,99 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(janitor)
+library(ISLR)
+library(tree)
+library(randomForest)
+library(gbm)
+library(e1071)
+library(caret)
 ```
 
 ## read data
 ```{r}
-test_data = read.table("/test_data.txt")
+pd.dat = read.csv("./train_data.txt",header = FALSE, col.names = c("id","jitter_1","jitter_2","jitter_3","jitter_4","jitter_5","shimmer_1","shimmer_2","shimmer_3","shimmer_4","shimmer_5","shimmer_6","ac","nth","htn","median_pitch","mean_pitch","sd_pitch","min_pitch","max_pitch","pulses","periods","mean_period","sd_period","luf","breaks","dov_breaks","updrs","class"))
+
+pd.dat= pd.dat%>%
+  select(-updrs,-id)
+
+set.seed(1)
+train = sample(dim(pd.dat)[1], 640)
+train_data = pd.dat[train, ]
+#a test set containing the remaining observations
+test_data = pd.dat[-train, ]
+```
+
+# PCA - denoising the data
+```{r}
+pca.dat=pd.dat%>%
+  select(-class)
+
+pr.out=prcomp(pca.dat, scale=TRUE)
+Cols=function(vec){
+ cols=rainbow(length(unique(vec)))
+ return(cols[as.numeric(as.factor(vec))]) 
+}
+
+par(mfrow=c(1,2))
+plot(pr.out$x[,1:2], col=Cols(pd.dat$class), pch=20,cex=0.5,
+xlab="Z1",ylab="Z2")
+plot(pr.out$x[,c(1,3)], col=Cols(pd.dat$class), pch=20,cex=0.5,
+xlab="Z1",ylab="Z3")
+
+summary(pr.out) 
+
+pve=100*pr.out$sdev^2/sum(pr.out$sdev^2)
+par(mfrow=c(1,2))
+plot(pve, type="o", ylab="PVE", xlab="Principal Component",
+col =" blue ")
+plot(cumsum(pve), type="o", ylab="Cumulative PVE", xlab="
+Principal Component ", col =" brown3 ")
+
+# We see that together, the first seven principal components explain around 90 % of the variance in the data. This is a huge amount of the variance. However, looking at the scree plot, we see that while each of the first seven principal components explain a substantial amount of variance, there is a marked decrease in the variance explained by further principal components. That is, there is an elbow in the plot after approximately the seventh principal component. This suggests that there may be little benefit to examining more than seven or so principal components (though even examining seven principal components may be difficult)
+```
+
+# K-mean clustering - finding out whether or not the observations cluster into 2 classes
+```{r}
+# In our data, we know that there truly are two clusters in the data: the first 520 observations have PD and the next 520 observations don't have PD. 
+# We now perform K-means clustering with K = 2 using all data.
+set.seed(2)
+km.out=kmeans(pca.dat, 2, nstart=20)
+
+table(km.out$cluster)
+# The K-means clustering does not separate the observations into two clusters. 
+
+# total within-cluster sum of squares, which we seek to minimize by performing K-means clustering
+km.out$tot.withinss
+
+# We can plot the data, with each observation colored according to its cluster assignment. Because there were more than two variables, we could instead use the result in PCA and plot the first two principal components score vectors.
+plot(pr.out$x[,c(1,2)], col=(km.out$cluster+1), main="K-Means Clustering Results with K=2", xlab="", ylab="", pch=20, cex=0.5)
+
+# Rather than performing hierarchical clustering on the entire data matrix, we can simply perform hierarchical clustering on the first few principal component score vectors, as follows
+km.out2=kmeans(pr.out$x[,1:7], 2, nstart=20)
+table(km.out2$cluster)
+km.out2$tot.withinss
+plot(pr.out$x[,c(1,2)], col=(km.out2$cluster+1), main="K-Means Clustering Results with K=2 on First Seven Score Vectors", xlab="", ylab="", pch=20, cex=0.5)
+
+# Not surprisingly, these results are different from the ones that we obtained when we performed K-means clustering on the full data set. Sometimes performing clustering on the first few principal component score vectors can give better results than performing clustering on the full data. In this situation, we might view the principal component step as one of denoising the data. The K-means clustering on the first 7 principle component score vectors perfectly separated the observations into two clusters even though we did not supply any group information to kmeans().
+```
+# svm with linear kernal
+```{r }
+#  Use the tune() function to select cost in the classifier
+set.seed(1)
+tune.out=tune(svm, factor(class) ~ ., data=train_data, 
+                 kernel="linear",
+                  ranges=list(cost=10^seq(-2, 1, by=0.25)))
+summary(tune.out)
+# best parameters
+tune.out$best.parameters
+
+# Fit a support vector machine with a linear kernel to the training data
+svm.linear = svm(factor(class)~., data=train_data, kernel="linear", cost=tune.out$best.parameters$cost)
+summary(svm.linear)
+
+table(true=train_data$class, pred=predict(svm.linear, newdata=train_data))
+error_train.linear = (179+168)/(341+179+168+352)
+
+table(true=test_data$class, pred=predict(svm.linear, newdata=test_data))
+error_test.linear = 158/169
 ```

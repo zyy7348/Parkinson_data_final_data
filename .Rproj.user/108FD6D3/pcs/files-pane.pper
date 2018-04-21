@@ -1,0 +1,9 @@
+{
+    "path" : "~/Parkinson_data_final_data",
+    "sortOrder" : [
+        {
+            "ascending" : true,
+            "columnIndex" : 2
+        }
+    ]
+}
