@@ -17,6 +17,7 @@ library(e1071)
 library(caret)
 library(ROCR)
 library(pROC)
+library(corrplot)
 ```
 
 ## read data
@@ -24,7 +25,7 @@ library(pROC)
 pd.dat = read.csv("./train_data.txt",header = FALSE, col.names = c("id","jitter_1","jitter_2","jitter_3","jitter_4","jitter_5","shimmer_1","shimmer_2","shimmer_3","shimmer_4","shimmer_5","shimmer_6","ac","nth","htn","median_pitch","mean_pitch","sd_pitch","min_pitch","max_pitch","pulses","periods","mean_period","sd_period","luf","breaks","dov_breaks","updrs","class"))
 
 pd.dat= pd.dat%>%
-  select(-updrs,-id)%>%
+  dpltr::select(-updrs,-id)%>%
   mutate(class=factor(class))
 
 set.seed(1)
@@ -41,7 +42,7 @@ corrplot(correlations, order = "original")#, tl.cex = 0.2)
 # PCA - denoising the data
 ```{r}
 pca.dat=pd.dat%>%
-  select(-class)
+  dplyr::select(-class)
 
 pr.out=prcomp(pca.dat, scale=TRUE)
 
@@ -159,4 +160,224 @@ roc.svm2 <- roc(test_data$class,as.numeric(fitted2),
                levels = c(0,1))
 plot(roc.svm2, legacy.axes = TRUE)
 roc.svm2$auc
+```
+
+#build tree
+```{r build tree}
+#build a normal tree  
+tree.class = tree(class~.,train_data)
+summary(tree.class)
+
+set.seed(1)
+cv.class <- cv.tree(tree.class)
+tree.min <- which.min(cv.class$dev)
+plot(cv.class$size, cv.class$dev, type = "b")
+points(tree.min, cv.class$dev[tree.min], col = "red", cex = 2, pch = 20)
+
+#choose the optimal tree with size 12,
+prune.class <- prune.tree(tree.class, best = 12)
+summary(prune.class)# terminal nodes=13
+
+#plot the tree
+library(partykit)
+ctree.class <- ctree(class~.,train_data)
+plot(ctree.class)
+
+
+#tree with optimal size
+plot(prune.class)
+text(prune.class, pretty = 0)
+prune.class
+
+```
+
+
+# produce a confusion matrix
+```{r}
+tree.class=tree(class~., train_data)
+tree.pred=predict(tree.class,newdata = test_data,type = "class")
+table(tree.pred,test_data$class)
+#test error rate is (102+47)/(102+47+146+105)=37%
+```
+
+#bagging
+```{r bagging}
+library(randomForest)
+set.seed(1)
+bag.class <- randomForest(class~., data=train_data,
+                           mtry=26, importance =TRUE)
+importance(bag.class)
+varImpPlot(bag.class)
+#the most important predictors are max.pitch, median pitch, sd.pitch,shimmmer 5, jitter 4
+
+tree.pred.bag=predict(bag.class,newdata=test_data,type = "class")
+table(tree.pred.bag,test_data$class)
+#test error rate is (55+65)/(400)=30%
+```
+
+#randomforest
+```{r randomforest}
+set.seed(1)
+rf.class <- randomForest(class~., data=train_data,
+                           mtry=5, importance =TRUE)
+importance(rf.class)
+varImpPlot(rf.class)
+#the most important predictors are max.pitch, median pitch, sd.pitch,shimmmer 5
+
+tree.pred.rf=predict(rf.class,newdata = test_data,type = "class")
+table(tree.pred.rf,test_data$class)
+#test error rate is (54+64)/(400)=29.5%
+```
+
+#boosting
+```{r boosting}
+library(gbm)
+set.seed(1)
+
+pd.dat$class2<- as.numeric(pd.dat$class == "1")
+
+boost.class=gbm(class2~. ,data=pd.dat[train,-27], distribution="bernoulli", n.trees=5000,interaction.depth=1)
+summary(boost.class)
+tree.pred.boost=predict(boost.class,newdata=pd.dat[-train,-27],n.trees=5000,type = "response")
+pred=round(tree.pred.boost)
+table(pred,pd.dat$class2[-train])
+##test error rate is (63+72)/(400)=33.75%
+
+pd.dat=pd.dat%>%
+  select(-class2)
+```
+
+
+#Fit a support vector classifier (linear kernel)
+```{r}
+set.seed(1)
+tune.out=tune(svm,class~.,data=train_data,kernel="linear",ranges=list(cost=c(0.001,0.01,0.1,1,5,10,100)))
+summary(tune.out)
+tune.out$best.model #cost=5 is the best
+
+#training error
+svm.pred.train <- predict(tune.out$best.model, newdata = test_data,type="class")
+table(svm.pred.train,test_data$class)
+#test error is (72+68)/(400)=35%
+```
+
+#a support vector machine with a radial kernel 
+```{r}
+set.seed(1)
+tune.out.ker=tune(svm,class~.,data=train_data,kernel="radial",ranges=list(cost=c(0.1,1,5,10),gamma=c(0.005,0.01,0.03,0.05,0.1,0.5,1)))
+summary(tune.out.ker)
+#cost=10, gamma=0.05 is the best
+
+svm.pred.ker.test <- predict(tune.out.ker$best.model, newdata =test_data)
+table(svm.pred.ker.test,test_data$class)
+#testing error is (70+55)/400=31.25%
+```
+
+## Logistic regression
+
+```{r}
+glm.fit <- glm(class~., data=train_data, family=binomial)
+summary(glm.fit)
+
+glm.probs=predict(glm.fit,type="response")
+glm.pred=rep("0",length(glm.probs))
+glm.pred[glm.probs >.5]="1"
+table(glm.pred,train_data$class)
+## train error rate is (113+117)/(230+210+200)=35.9%
+```
+
+The smaller p-values here are associated with pulses, periods, luf, breaks and dov_breaks. The negative coefficient for pulses, luf, and dov_breaks suggests that if the number of pulses, fraction of locally unvoiced frames and degree of voice breaks of a subject increase, then he or she is less likely to be classified into parkinson group. 
+
+The positive coefficient for periods and breaks suggests that if the number of periods and number of voice breaks of a subject increase, then he or she is more likely to be classified into parkinson group.
+
+## ROC
+
+```{r}
+test.pred.prob  <- predict(glm.fit, newdata = test_data, type="response")
+test.pred <- rep("0", length(test.pred.prob))
+test.pred[test.pred.prob>0.5] <- "1"
+
+roc.glm <- roc(test_data$class, test.pred.prob, levels = c("0", "1"))
+plot.roc(roc.glm, legacy.axes = TRUE,print.auc=TRUE,,main="ROC curve")
+```
+
+## Confusion Matrix
+```{r}
+confusionMatrix(data = as.factor(test.pred),
+                reference = test_data$class)
+## test error is (76+72)/(121+76+72+131)=37%
+```
+
+## LDA
+```{r}
+library(MASS)
+lda.fit <- lda(class~., data=train_data)
+plot(lda.fit)
+lda.pred <- predict(lda.fit, newdata = test_data)
+head(lda.pred$posterior)
+roc.lda <- roc(test_data$class, lda.pred$posterior[,2], 
+               levels = c("0", "1"))
+plot.roc(roc.lda, legacy.axes = TRUE,print.auc=TRUE,,main="ROC curve")
+```
+
+```{r}
+table(glm.pred,t)
+```
+
+
+
+## QDA
+```{r}
+qda.fit <- qda(class~., data=train_data)
+qda.fit
+qda.class=predict(qda.fit,train_data)$class 
+table(qda.class,train_data$class)
+mean(qda.class==train_data$class)
+```
+
+the QDA predictions are accurate almost 65.5% of the time
+
+```{r}
+qda.class=predict(qda.fit,test_data)$class 
+table(qda.class,test_data$class)
+mean(qda.class==test_data$class)
+```
+
+the QDA predictions are accurate almost 60% of the time
+
+## KNN
+```{r}
+library(class)
+set.seed (1)
+knn.pred=knn(train_data[-72],test_data[-72],train_data$class ,k=1)
+table(knn.pred,test_data$class)
+## (165+181)/(165+181+28+26)=86.5% of the observations are correctly predicted.
+```
+
+```{r}
+set.seed (1)
+knn.pred=knn(train_data[-72],test_data[-72],train_data$class ,k=3)
+table(knn.pred,test_data$class)
+## (169+173)/(169+173+24+34)=85.5% of the observations are correctly predicted.
+```
+
+```{r}
+set.seed (1)
+knn.pred=knn(train_data[-72],test_data[-72],train_data$class ,k=5)
+table(knn.pred,test_data$class)
+## (165+173)/(165+173+20+42)=84.5% of the observations are correctly predicted.
+```
+
+```{r}
+set.seed (1)
+knn.pred=knn(train_data[-72],test_data[-72],train_data$class ,k=5)
+table(knn.pred,test_data$class)
+## (165+173)/(165+173+20+42)=84.5% of the observations are correctly predicted.
+```
+
+```{r}
+set.seed (1)
+knn.pred=knn(train_data[-72],test_data[-72],train_data$class ,k=10)
+table(knn.pred,test_data$class)
+## (159+171)/(159+171+22+48)=82.5% of the observations are correctly predicted.
 ```
