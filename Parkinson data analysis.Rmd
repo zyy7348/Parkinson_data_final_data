@@ -1,6 +1,6 @@
 ---
 title: "Parkinson Speech data analysis"
-author: "Yeyi Zhang"
+author: "Yeyi Zhang, Siling Li, Xin Zheng"
 date: "2018/4/18"
 output: html_document
 ---
@@ -25,7 +25,7 @@ library(corrplot)
 pd.dat = read.csv("./train_data.txt",header = FALSE, col.names = c("id","jitter_1","jitter_2","jitter_3","jitter_4","jitter_5","shimmer_1","shimmer_2","shimmer_3","shimmer_4","shimmer_5","shimmer_6","ac","nth","htn","median_pitch","mean_pitch","sd_pitch","min_pitch","max_pitch","pulses","periods","mean_period","sd_period","luf","breaks","dov_breaks","updrs","class"))
 
 pd.dat= pd.dat%>%
-  dpltr::select(-updrs,-id)%>%
+  dplyr::select(-updrs,-id)%>%
   mutate(class=factor(class))
 
 set.seed(1)
@@ -319,12 +319,6 @@ roc.lda <- roc(test_data$class, lda.pred$posterior[,2],
                levels = c("0", "1"))
 plot.roc(roc.lda, legacy.axes = TRUE,print.auc=TRUE,,main="ROC curve")
 ```
-
-```{r}
-table(glm.pred,t)
-```
-
-
 
 ## QDA
 ```{r}
